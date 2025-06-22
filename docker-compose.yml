@@ -1,0 +1,128 @@
+# E-commerce Platform Docker Compose - ARM64 (Apple Silicon) Optimized
+
+services:
+  # PostgreSQL Database
+  database:
+    platform: linux/arm64
+    image: postgres:17-alpine
+    container_name: ecommerce-database
+    environment:
+      POSTGRES_DB: ecommerce_db
+      POSTGRES_USER: ecommerce_user
+      POSTGRES_PASSWORD: ecommerce_pass
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecommerce_user -d ecommerce_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - ecommerce-network
+    restart: unless-stopped
+
+  # Authentication Service
+  auth-service:
+    platform: linux/arm64
+    build:
+      context: ./backend/auth-service
+      dockerfile: Dockerfile
+    container_name: ecommerce-auth-service
+    environment:
+      - DATABASE_URL=postgresql://ecommerce_user:ecommerce_pass@database:5432/ecommerce_db
+      - JWT_SECRET_KEY=production-jwt-secret-change-in-production
+      - FLASK_ENV=development
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "5000:5000"
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    networks:
+      - ecommerce-network
+    restart: unless-stopped
+
+  # User Service
+  user-service:
+    platform: linux/arm64
+    build:
+      context: ./backend/user-service
+      dockerfile: Dockerfile
+    container_name: ecommerce-user-service
+    environment:
+      - DATABASE_URL=postgresql://ecommerce_user:ecommerce_pass@database:5432/ecommerce_db
+      - JWT_SECRET_KEY=production-jwt-secret-change-in-production
+      - FLASK_ENV=development
+      - AUTH_SERVICE_URL=http://auth-service:5000
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "5001:5001"
+    depends_on:
+      database:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    networks:
+      - ecommerce-network
+    restart: unless-stopped
+
+  # React Frontend
+  frontend:
+    platform: linux/arm64
+    build:
+      context: ./frontend/e-commerce-app
+      dockerfile: Dockerfile
+    container_name: ecommerce-frontend
+    environment:
+      - VITE_API_BASE_URL=http://localhost:5000
+      - VITE_USER_SERVICE_URL=http://localhost:5001
+    ports:
+      - "3000:80"
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - ecommerce-network
+    restart: unless-stopped
+
+# Volumes
+volumes:
+  postgres_data:
+    driver: local
+    name: ecommerce_postgres_data
+
+# Networks
+networks:
+  ecommerce-network:
+    driver: bridge
+    name: ecommerce_network
+    # ipam:
+    #   driver: default
+    #   config:
+    #     - subnet: 172.20.0.0/16
+    #       gateway: 172.20.0.1

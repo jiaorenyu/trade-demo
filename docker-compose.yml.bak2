@@ -1,0 +1,105 @@
+# E-commerce Platform Docker Compose - Development Setup
+
+services:
+  # PostgreSQL Database
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ecommerce_db
+      POSTGRES_USER: ecommerce_user
+      POSTGRES_PASSWORD: ecommerce_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecommerce_user -d ecommerce_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - ecommerce-network
+    restart: unless-stopped
+
+  # Authentication Service
+  auth-service:
+    build:
+      context: ./backend/auth-service
+      dockerfile: Dockerfile.minimal
+    environment:
+      DATABASE_URL: postgresql://ecommerce_user:ecommerce_pass@database:5432/ecommerce_db
+      JWT_SECRET_KEY: production-jwt-secret-change-in-production
+      FLASK_ENV: development
+    ports:
+      - "5000:5000"
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - ecommerce-network
+    restart: unless-stopped
+
+  # User Service
+  user-service:
+    build:
+      context: ./backend/user-service
+      dockerfile: Dockerfile.minimal
+    environment:
+      DATABASE_URL: postgresql://ecommerce_user:ecommerce_pass@database:5432/ecommerce_db
+      JWT_SECRET_KEY: production-jwt-secret-change-in-production
+      FLASK_ENV: development
+      AUTH_SERVICE_URL: http://auth-service:5000
+    ports:
+      - "5001:5001"
+    depends_on:
+      database:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - ecommerce-network
+    restart: unless-stopped
+
+  # React Frontend - Cross-platform compatible
+  frontend:
+    build:
+      context: ./frontend/e-commerce-app
+      dockerfile: Dockerfile.minimal.minimal
+    environment:
+      VITE_API_BASE_URL: http://localhost:5000
+      VITE_USER_SERVICE_URL: http://localhost:5001
+    ports:
+      - "3000:80"
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - ecommerce-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  ecommerce-network:
+    name: trade-demo-ecommerce-network
+    driver: bridge
